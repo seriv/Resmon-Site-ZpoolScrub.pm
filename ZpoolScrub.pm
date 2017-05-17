@@ -19,6 +19,11 @@ Site::ZpoolScrub - return scrub statistics
      <zpoolname>: noop
  }
 
+or 
+ Site::ZpoolScrub {
+     <spoolname>: <scrub_times_hash_file>
+}
+
 =head1 DESCRIPTION
 
 This module gives statistics of scrupb of zpool
@@ -30,6 +35,11 @@ This module gives statistics of scrupb of zpool
 =item check_name
 
 The check name is the name of zpool for which statistics of scrub is checked.
+
+=item scrub_times_hash_file
+
+The full path of file to store time which last successful scrub command took.
+Defaults to "/var/run/.resmon-status-${zpoolname}.howlong"
 
 =back
 
@@ -69,6 +79,10 @@ sub handler {
     my $self = shift;
     my $config = $self->{config}; # All configuration is in here
     my $zpool = $self->{check_name};
+    my $statusfile = $config->{scrub_times_hash_file} || "/var/run/.resmon-status-${zpool}.howlong";
+    my $oldhowlong = ( ( -r $statusfile ) ? `cat $statusfile` : 0 );
+    chomp $oldhowlong;
+    $oldhowlong = 0 unless $oldhowlong =~ /^[\d]+$/;
 =pod
   scan: scrub repaired 0 in 78h6m with 0 errors on Tue Mar 29 00:16:48 2016
  - or - 
@@ -83,29 +97,23 @@ sub handler {
       if (/^\s*scan:\s+scrub\s+canceled\s+on\s+(.+)$/){
         $when = $1;
         $when = `$DATE '+%s'` - `$DATE '+%s' -d "$when"`; 
-        return {
-          "when"     =>  [int(($when+30)/60), "i"],
-          "howlong"  =>  [0,  "i"],
-          "togo"     =>  [0,  "i"],
-          "repaired" =>  [0,  "i"],
-          "errors"   =>  [0,  "i"],
-          "canceled" =>  [1,  "i"]
-        }
+        $when = int(($when+30)/60);
+        $canceled = 1;
+        $howlong = $oldhowlong;
+        $togo = 0;
+        $repaired = 0;
+        $errors = 0;
+        $canceled = 1;
       }
       elsif (/^\s*scan:\s+scrub\s+repaired\s+(\d*)\s+in\s+(\d*)h(\d*)m\s+with\s+(\d*)\s+errors\s+on\s+(.+)$/){
         ($repaired,$h,$m,$errors,$when) = ($1,$2,$3,$4,$5);
         $when = `$DATE '+%s'` - `$DATE '+%s' -d "$when"`; 
         $howlong = 60*$h+$m;
         $when += 60*$howlong;
+        $when = int(($when+30)/60);
         $repaired += $errors if $repaired < $errors;
-        return {
-          "when"     =>  [int(($when+30)/60), "i"],
-          "howlong"  =>  [$howlong,  "i"],
-          "togo"     =>  [$togo, "i"],
-          "repaired" =>  [$repaired,  "i"],
-          "errors"   =>  [$errors,  "i"],
-          "canceled" =>  [0,  "i"]
-        }
+        $togo = 0;
+        `/usr/gnu/bin/echo -n $howlong > $statusfile` unless $howlong == $oldhowlong && (-w $statusfile);
       }
       elsif (/^\s*scan:\s+scrub\s+in\s+progress\s+since\s+(.+)$/){
         $when = $1;
@@ -116,20 +124,19 @@ sub handler {
       } 
       elsif (/^\s*\S+\s+scanned\s+out\s+of\s+\S+\s+at\s+\S+,\s+(\d+)h(\d+)m\s+to\s+go\s*$/){
         $togo = $1*60 +$2;
-        $howlong = $when + $togo;
+        $howlong = $oldhowlong;
       }
       elsif (/^\s*(\d+)\s+repaired,/){
         $repaired = $1;
       }
     }
     return {
-      "when"     =>  [$when, "i"],
-      "howlong"  =>  [$howlong,  "i"],
-      "togo"     =>  [$togo, "i"],
-      "repaired" =>  [$repaired,  "i"],
-      "errors"   =>  [$errors,  "i"],
-      "canceled" =>  [0,  "i"]
-
+      "when"       => [$when, "i"],
+      "howlong"    => [$howlong,  "i"],
+      "togo"       => [$togo, "i"],
+      "repaired"   => [$repaired,  "i"],
+      "errors"     => [$errors,  "i"],
+      "canceled"   => [$canceled,  "i"],
     }
 }
 
